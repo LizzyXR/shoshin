@@ -1,2 +1,3 @@
-# shoshin
-A window manager built on neuswc
+``bmake``
+<br />
+``bmake install``
