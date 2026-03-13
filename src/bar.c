@@ -15,7 +15,7 @@
  * IPC (read-only):
  *   ~/.config/shoshin/workspace      current workspace number
  *   ~/.config/shoshin/focused_title  focused window title
- */
+*/
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -49,16 +49,16 @@ extern struct wld_context *wld_pixman_context;
 /* SHM double-buffer */
 struct shm_buf {
 	struct wl_buffer *wl;
-	void  *data;
+	void *data;
 	size_t size;
-	bool busy; /* the compositor holds it */
+	bool busy; /* compositor holds it */
 };
 
 /* bar state */
 static volatile sig_atomic_t running = 1;
 
 static struct {
-	/* wayland stuff */
+	/* wayland */
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
@@ -90,14 +90,12 @@ static struct {
 	char hostname[64];
 } bar;
 
-/* signals */
 static void
 on_signal(int s) {
 	(void)s;
 	running = 0;
 }
 
-/* IPC */
 static void
 ipc_read(const char *name, char *buf, size_t n)
 {
@@ -140,11 +138,14 @@ update_cpu(void)
 	unsigned long long u, n, s, idle, iow, irq, sirq, steal;
 	unsigned long long total, d_idle, d_total;
 	FILE *f = fopen("/proc/stat", "r");
-	if(!f) { snprintf(bar.cpu, sizeof(bar.cpu), "cpu:?"); return; }
+	if(!f) {
+		snprintf(bar.cpu, sizeof(bar.cpu), "cpu:?");
+		return;
+	}
 	fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &u, &n, &s, &idle, &iow, &irq, &sirq, &steal);
 	fclose(f);
 	total = u + n + s + idle + iow + irq + sirq + steal;
-	d_idle = idle  - prev_idle;
+	d_idle = idle - prev_idle;
 	d_total = total - prev_total;
 	prev_idle = idle;
 	prev_total = total;
@@ -345,7 +346,7 @@ render(void)
 					break;
 				}
 			}
-			if(title[0])
+			if(title[0]) 
 				wld_draw_text(bar.renderer, bar.font, cfg.bar_fg, x, text_y, title, (uint32_t)strlen(title), NULL);
 		}
 	}
@@ -378,7 +379,7 @@ panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 
 	/* allocate double buffers */
 	if(!buf_alloc(&bar.bufs[0], bar.width, bar.height) || !buf_alloc(&bar.bufs[1], bar.width, bar.height)) {
-		fprintf(stderr, "bar: shm alloc failed\n");
+		fprintf(stderr, "[bar] shm alloc failed\n");
 		running = 0;
 		return;
 	}
@@ -386,7 +387,7 @@ panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 	/* renderer from pixman context */
 	bar.renderer = wld_create_renderer(wld_pixman_context);
 	if(!bar.renderer) {
-		fprintf(stderr, "bar: wld_create_renderer failed\n");
+		fprintf(stderr, "[bar] wld_create_renderer failed\n");
 		running = 0;
 		return;
 	}
@@ -396,7 +397,12 @@ panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 	if(bar.font_ctx)
 		bar.font = wld_font_open_name(bar.font_ctx, cfg.bar_font);
 	if(!bar.font)
-		fprintf(stderr, "bar: font '%s' not found, text will be absent\n", cfg.bar_font);
+		fprintf(stderr, "[bar] font '%s' not found, text will be absent\n", cfg.bar_font);
+
+	/* bar rendering still broken cuz i'm a pos */
+	update_all();
+	render();
+	wl_display_flush(bar.display);
 
 	/* tell swc how much space to reserve */
 	swc_panel_set_strut(panel, bar.height, 0, bar.width);
@@ -432,7 +438,6 @@ static const struct wl_registry_listener registry_listener = {
 	.global_remove = registry_global_remove,
 };
 
-/* bar_main */
 int
 bar_main(void)
 {
@@ -462,7 +467,7 @@ bar_main(void)
 
 	bar.display = wl_display_connect(NULL);
 	if(!bar.display) {
-		fprintf(stderr, "bar: cannot connect to wayland\n");
+		fprintf(stderr, "[bar] cannot connect to wayland\n");
 		return 1;
 	}
 
@@ -471,24 +476,23 @@ bar_main(void)
 	wl_display_roundtrip(bar.display);
 
 	if(!bar.compositor || !bar.shm || !bar.panel_manager) {
-		fprintf(stderr, "bar: missing wayland globals "
+		fprintf(stderr, "[bar] missing wayland globals "
 		        "(compositor=%p shm=%p panel_manager=%p)\n",
 		        (void*)bar.compositor,
 		        (void*)bar.shm,
-		        (void*)bar.panel_manager
-		);
+		        (void*)bar.panel_manager);
 		return 1;
 	}
 
 	bar.surface = wl_compositor_create_surface(bar.compositor);
 	if(!bar.surface) {
-		fprintf(stderr, "bar: no surface\n");
+		fprintf(stderr, "[bar] no surface\n");
 		return 1;
 	}
 
 	bar.panel = swc_panel_manager_create_panel(bar.panel_manager, bar.surface);
 	if(!bar.panel) {
-		fprintf(stderr, "bar: no panel\n");
+		fprintf(stderr, "[bar] no panel\n");
 		return 1;
 	}
 	swc_panel_add_listener(bar.panel, &panel_listener, NULL);
@@ -498,7 +502,7 @@ bar_main(void)
 	wl_display_roundtrip(bar.display);
 
 	if(!bar.docked) {
-		fprintf(stderr, "bar: docked event not received\n");
+		fprintf(stderr, "[bar] docked event not received\n");
 		return 1;
 	}
 
@@ -553,7 +557,8 @@ bar_main(void)
 
 	if(bar.panel) swc_panel_destroy(bar.panel);
 	if(bar.surface) wl_surface_destroy(bar.surface);
-	if(bar.panel_manager) swc_panel_manager_destroy(bar.panel_manager);
+	if(bar.panel_manager)
+		swc_panel_manager_destroy(bar.panel_manager);
 	if(bar.shm) wl_shm_destroy(bar.shm);
 	if(bar.compositor) wl_compositor_destroy(bar.compositor);
 	if(bar.registry) wl_registry_destroy(bar.registry);

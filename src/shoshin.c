@@ -100,6 +100,16 @@ reloadconfig(void *data, uint32_t time, uint32_t key, uint32_t state)
 }
 
 static void
+killwindow(void *data, uint32_t time, uint32_t value, uint32_t state)
+{
+	(void)data;
+	(void)time;
+	(void)value;
+	if(state) return;
+	if(focused) swc_window_close(focused);
+}
+
+static void
 quit(void *data, uint32_t time, uint32_t value, uint32_t state)
 {
 	(void)data;
@@ -134,11 +144,11 @@ static void
 on_deactivate(void) {}
 
 static const struct swc_manager manager = {
-	.new_screen  = newscreen,
-	.new_window  = newwindow,
-	.new_device  = newdevice,
-	.activate    = on_activate,
-	.deactivate  = on_deactivate,
+	.new_screen = newscreen,
+	.new_window = newwindow,
+	.new_device = newdevice,
+	.activate = on_activate,
+	.deactivate = on_deactivate,
 };
 
 int
@@ -151,7 +161,7 @@ main(int argc, char **argv)
 
 	static const uint32_t ws_keys[9] = {XKB_KEY_1, XKB_KEY_2, XKB_KEY_3, XKB_KEY_4, XKB_KEY_5, XKB_KEY_6, XKB_KEY_7, XKB_KEY_8, XKB_KEY_9};
 
-	/* if invoked as the bar, hand off immediately */
+	/* if invoked as the bar; hand off immediately */
 	if(argc >= 2 && strcmp(argv[1], "--bar") == 0) return bar_main();
 
 	wl_list_init(&windows);
@@ -182,7 +192,8 @@ main(int argc, char **argv)
 	setup_nein_cursor();
 
 	/* keybindings */
-	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT | SWC_MOD_CTRL, XKB_KEY_q, quit, NULL);
+	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT | SWC_MOD_CTRL, XKB_KEY_q, quit, NULL); //kys
+	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO, XKB_KEY_q, killwindow, NULL); //kill focused window
 	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT, XKB_KEY_r, reloadconfig, NULL);
 
 	for(i = 0; i < 9; i++) {
@@ -190,16 +201,19 @@ main(int argc, char **argv)
 		swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT, ws_keys[i], workspace_move_window, (void*)(intptr_t)(i + 1));
 	}
 
-	swc_add_binding(SWC_BINDING_BUTTON, SWC_MOD_ANY, BTN_LEFT,   button, NULL);
+	swc_add_binding(SWC_BINDING_BUTTON, SWC_MOD_ANY, BTN_LEFT, button, NULL);
 	swc_add_binding(SWC_BINDING_BUTTON, SWC_MOD_ANY, BTN_MIDDLE, button, NULL);
-	swc_add_binding(SWC_BINDING_BUTTON, SWC_MOD_ANY, BTN_RIGHT,  button, NULL);
+	swc_add_binding(SWC_BINDING_BUTTON, SWC_MOD_ANY, BTN_RIGHT, button, NULL);
 	if(swc_add_axis_binding(SWC_MOD_ANY, 0, axis, NULL) < 0)
 		fprintf(stderr, "cannot bind vertical scroll axis\n");
 	if(swc_add_axis_binding(SWC_MOD_ANY, 1, axis, NULL) < 0)
 		fprintf(stderr, "cannot bind horizontal scroll axis\n");
 
 	sock = wl_display_add_socket_auto(display);
-	if(!sock) { fprintf(stderr, "cannot add socket\n"); return 1; }
+	if(!sock) {
+		fprintf(stderr, "cannot add socket\n");
+		return 1;
+	}
 
 	printf("%s\n", sock);
 	setenv("WAYLAND_DISPLAY", sock, 1);
@@ -210,7 +224,7 @@ main(int argc, char **argv)
 	spawn_bar();
 
 	signal(SIGTERM, sig);
-	signal(SIGINT,  sig);
+	signal(SIGINT, sig);
 	signal(SIGCHLD, SIG_IGN);
 
 	wl_display_run(display);
