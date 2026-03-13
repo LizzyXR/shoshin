@@ -1,8 +1,15 @@
+#### basically a [hevel](https://git.sr.ht/~dlm/hevel) fork with a bar and keybinds
+
+to install: <br/>
 ``bmake``
 <br />
-``bmake install``
+``# bmake install``
+<br /><br />
+or
+``sh install.sh``
+<br />
 
-basically a hevel fork with a bar and keybinds
+
 
 current broken/not implemented stuff:
 - [x] workspace scrolling not yet working
