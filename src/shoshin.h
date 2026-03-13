@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <wayland-server.h>
@@ -118,6 +119,9 @@ extern int current_workspace;
 /* bar child pid */
 extern pid_t bar_pid;
 
+/* neumenu child pid */
+extern pid_t neumenu_pid;
+
 /* function declarations */
 
 /* window.c */
@@ -135,19 +139,19 @@ void button(void *data, uint32_t time, uint32_t b, uint32_t state);
 void axis(void *data, uint32_t time, uint32_t ax, int32_t value120);
 bool cursor_position(int32_t *x, int32_t *y);
 bool cursor_position_raw(int32_t *x, int32_t *y);
-int  cursor_tick(void *data);
+int cursor_tick(void *data);
 void click_cancel(void);
 
 /* scroll.c */
 void scroll_stop(void);
-int  scroll_tick(void *data);
-int  scroll_drag_tick(void *data);
-int  move_scroll_tick(void *data);
+int scroll_tick(void *data);
+int scroll_drag_tick(void *data);
+int move_scroll_tick(void *data);
 
 /* select.c */
 void update_mode_cursor(void);
 void stop_select(void);
-int  select_tick(void *data);
+int select_tick(void *data);
 void spawn_term_select(const struct swc_rectangle *geometry);
 
 /* zoom.c */

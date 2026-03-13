@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 typedef enum {
 	CHORD21_STICKY = 0,
@@ -74,5 +75,6 @@ struct cfg {
 extern struct cfg cfg;
 
 void cfg_load(const char *path);
+void cfg_find_path(char *out, size_t n, const char *binary_path);
 
 #endif

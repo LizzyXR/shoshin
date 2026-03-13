@@ -3,7 +3,7 @@ BINDIR = $(PREFIX)/bin
 
 CFLAGS = -O2 -std=c99 -Wall -Wextra
 CFLAGS += -Isrc
-CFLAGS += -I$(PREFIX)/include
+#CFLAGS += -I$(PREFIX)/include
 CFLAGS += `pkg-config --cflags swc wayland-server wayland-client libinput pixman-1 xkbcommon libdrm wld`
 
 LDFLAGS = -L$(PREFIX)/lib -Wl,-rpath,$(PREFIX)/lib

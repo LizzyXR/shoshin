@@ -2,9 +2,11 @@
 
 #include "config.h"
 #include <ctype.h>
+#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 struct cfg cfg;
 
@@ -166,4 +168,49 @@ cfg_load(const char *path)
 
 	fclose(f);
 	fprintf(stderr, "[cfg] loaded %s (%dhz = %dms/tick)\n", path, cfg.targethz, cfg.timerms);
+}
+
+void
+cfg_find_path(char *out, size_t n, const char *binary_path)
+{
+	char *home, bin_dir[512], bin_copy[512];
+	FILE *f;
+
+	/* priority 1: SHOSHIN_CONFIG env var */
+	char *env_cfg = getenv("SHOSHIN_CONFIG");
+	if(env_cfg && env_cfg[0]) {
+		f = fopen(env_cfg, "r");
+		if(f) {
+			fclose(f);
+			snprintf(out, n, "%s", env_cfg);
+			return;
+		}
+	}
+
+	/* priority 2: binary's directory + shoshin.conf */
+	if(binary_path && binary_path[0]) {
+		snprintf(bin_copy, sizeof(bin_copy), "%s", binary_path);
+		char *dir = dirname(bin_copy);
+		snprintf(bin_dir, sizeof(bin_dir), "%s/shoshin.conf", dir);
+		f = fopen(bin_dir, "r");
+		if(f) {
+			fclose(f);
+			snprintf(out, n, "%s", bin_dir);
+			return;
+		}
+	}
+
+	/* priority 3: ~/.config/shoshin/shoshin.conf */
+	home = getenv("HOME");
+	if(home) {
+		snprintf(out, n, "%s/.config/shoshin/shoshin.conf", home);
+		f = fopen(out, "r");
+		if(f) {
+			fclose(f);
+			return;
+		}
+	}
+
+	/* fallback: empty path signals "no config found" */
+	out[0] = '\0';
 }

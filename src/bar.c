@@ -1,20 +1,12 @@
 /*
  * bar.c; the shoshin status bar :sunglasses:
  *
- * single binary: shoshin forks itself as:
- *   execl("/proc/self/exe", "shoshin", "--bar", NULL)
- *
- * rendering pipeline (no wld/wayland.h needed):
- *   wl_shm pool + mmap -> wld_import_buffer(wld_pixman_context, WLD_OBJECT_DATA, ...)
- *   -> wld renderer -> wld_fill_rectangle / wld_draw_text -> wld_flush
- *   -> wl_surface_attach + wl_surface_commit
- *
- * wld_pixman_context is EXPORT'd from the wld .so but not declared in wld.h,
- * so we extern-declare it here
- *
  * IPC (read-only):
- *   ~/.config/shoshin/workspace      current workspace number
- *   ~/.config/shoshin/focused_title  focused window title
+ *   /tmp/shoshin-<uid>/workspace      current workspace number
+ *   /tmp/shoshin-<uid>/focused_title  focused window title
+ *
+ * updates instantly via inotify on IPC dir
+ * status (cpu/ram/time) updates every 60 seconds via timerfd
 */
 
 #define _POSIX_C_SOURCE 200809L
@@ -28,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/mman.h>
 #include <sys/timerfd.h>
 #include <time.h>
@@ -39,26 +32,22 @@
 #include "swc-client-protocol.h"
 #include "config.h"
 
-/* wld_pixman_context is EXPORT'd from libwld.so but not declared in wld.h */
 extern struct wld_context *wld_pixman_context;
 
-#define WS_COUNT  9
-#define PAD_X     6
-#define WS_BOX_W  18
+#define WS_COUNT 9
+#define PAD_X 6
+#define WS_BOX_W 18
 
-/* SHM double-buffer */
 struct shm_buf {
 	struct wl_buffer *wl;
 	void *data;
 	size_t size;
-	bool busy; /* compositor holds it */
+	bool busy;
 };
 
-/* bar state */
 static volatile sig_atomic_t running = 1;
 
 static struct {
-	/* wayland */
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
@@ -67,27 +56,25 @@ static struct {
 	struct wl_surface *surface;
 	struct swc_panel *panel;
 
-	/* dimensions */
 	uint32_t width;
 	uint32_t height;
 	bool docked;
 
-	/* double-buffer */
 	struct shm_buf bufs[2];
 	int cur;
 
-	/* wld rendering */
 	struct wld_renderer *renderer;
 	struct wld_font_context *font_ctx;
 	struct wld_font *font;
 
-	/* ipc / status */
 	int workspace;
 	char title[256];
 	char cpu[16];
 	char ram[16];
 	char timestr[32];
 	char hostname[64];
+
+	char ipc_dir[256];
 } bar;
 
 static void
@@ -100,11 +87,10 @@ static void
 ipc_read(const char *name, char *buf, size_t n)
 {
 	char path[512];
-	const char *home = getenv("HOME");
 	FILE *f;
 	buf[0] = '\0';
-	if(!home) return;
-	snprintf(path, sizeof(path), "%s/.config/shoshin/%s", home, name);
+	if(!bar.ipc_dir[0]) return;
+	snprintf(path, sizeof(path), "%s/%s", bar.ipc_dir, name);
 	f = fopen(path, "r");
 	if(!f) return;
 	if(fgets(buf, (int)n, f)) {
@@ -114,7 +100,6 @@ ipc_read(const char *name, char *buf, size_t n)
 	fclose(f);
 }
 
-/* status update */
 static void
 update_workspace(void)
 {
@@ -187,7 +172,6 @@ update_all(void)
 	update_time();
 }
 
-/* SHM buffer management */
 static void
 buf_release(void *data, struct wl_buffer *wl)
 {
@@ -256,7 +240,6 @@ buf_free(struct shm_buf *b)
 	b->busy = false;
 }
 
-/* rendering */
 static int32_t
 text_w(const char *text)
 {
@@ -281,20 +264,17 @@ render(void)
 
 	if(!bar.docked || !bar.shm) return;
 
-	/* pick non-busy buffer */
 	b = &bar.bufs[bar.cur];
 	if(b->busy) {
 		bar.cur ^= 1;
 		b = &bar.bufs[bar.cur];
 	}
-	if(b->busy) return; /* both busy? skip frame */
+	if(b->busy) return;
 
-	/* import the mmap into wld_pixman_context */
 	obj.ptr = b->data;
 	wbuf = wld_import_buffer(wld_pixman_context, WLD_OBJECT_DATA, obj, bar.width, bar.height, WLD_FORMAT_ARGB8888, stride);
 	if(!wbuf) return;
 
-	/* target this buffer for rendering */
 	if(!wld_set_target_buffer(bar.renderer, wbuf)) {
 		wld_buffer_unreference(wbuf);
 		return;
@@ -302,12 +282,10 @@ render(void)
 
 	text_y = (int32_t)(bar.height / 2) - (int32_t)(bar.font ? bar.font->height / 2 : 0);
 
-	/* background */
 	wld_fill_rectangle(bar.renderer, cfg.bar_bg, 0, 0, bar.width, bar.height);
 
 	x = PAD_X;
 
-	/* workspace buttons */
 	for(i = 1; i <= WS_COUNT; i++) {
 		bg = (i == bar.workspace) ? cfg.bar_ws_active_bg : cfg.bar_bg;
 		fg = (i == bar.workspace) ? cfg.bar_ws_active_fg : cfg.bar_fg;
@@ -320,20 +298,16 @@ render(void)
 		x += WS_BOX_W + 1;
 	}
 
-	/* separator */
 	wld_fill_rectangle(bar.renderer, 0xff333333, x, 0, 1, bar.height);
 	x += PAD_X;
 
-	/* right-side status block */
 	snprintf(right, sizeof(right), "%s  %s  %s  %s", bar.cpu, bar.ram, bar.hostname, bar.timestr);
 	right_w = text_w(right) + PAD_X * 2;
 
-	/* title; clipped to available width */
 	if(bar.title[0] && bar.font) {
 		avail = (int32_t)bar.width - x - right_w - PAD_X;
 		if(avail > 0) {
 			snprintf(title, sizeof(title), "%s", bar.title);
-			/* trim until it fits (wtf am i doing) */
 			while(title[0] && text_w(title) > avail) {
 				size_t l = strlen(title);
 				if(l > 3) {
@@ -351,14 +325,12 @@ render(void)
 		}
 	}
 
-	/* right status */
 	if(bar.font)
 		wld_draw_text(bar.renderer, bar.font, cfg.bar_fg, (int32_t)bar.width - text_w(right) - PAD_X, text_y, right, (uint32_t)strlen(right), NULL);
 
 	wld_flush(bar.renderer);
-	wld_buffer_unreference(wbuf); /* renderer no longer needs it */
+	wld_buffer_unreference(wbuf);
 
-	/* present */
 	b->busy = true;
 	wl_surface_attach(bar.surface, b->wl, 0, 0);
 	wl_surface_damage(bar.surface, 0, 0, (int32_t)bar.width, (int32_t)bar.height);
@@ -368,7 +340,6 @@ render(void)
 	bar.cur ^= 1;
 }
 
-/* swc_panel listener */
 static void
 panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 {
@@ -377,14 +348,12 @@ panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 	bar.height = (uint32_t)cfg.bar_height;
 	bar.docked = true;
 
-	/* allocate double buffers */
 	if(!buf_alloc(&bar.bufs[0], bar.width, bar.height) || !buf_alloc(&bar.bufs[1], bar.width, bar.height)) {
 		fprintf(stderr, "[bar] shm alloc failed\n");
 		running = 0;
 		return;
 	}
 
-	/* renderer from pixman context */
 	bar.renderer = wld_create_renderer(wld_pixman_context);
 	if(!bar.renderer) {
 		fprintf(stderr, "[bar] wld_create_renderer failed\n");
@@ -392,19 +361,16 @@ panel_docked(void *data, struct swc_panel *panel, uint32_t length)
 		return;
 	}
 
-	/* font */
 	bar.font_ctx = wld_font_create_context();
 	if(bar.font_ctx)
 		bar.font = wld_font_open_name(bar.font_ctx, cfg.bar_font);
 	if(!bar.font)
 		fprintf(stderr, "[bar] font '%s' not found, text will be absent\n", cfg.bar_font);
 
-	/* bar rendering still broken cuz i'm a pos */
 	update_all();
 	render();
 	wl_display_flush(bar.display);
 
-	/* tell swc how much space to reserve */
 	swc_panel_set_strut(panel, bar.height, 0, bar.width);
 }
 
@@ -412,7 +378,6 @@ static const struct swc_panel_listener panel_listener = {
 	.docked = panel_docked,
 };
 
-/* registry */
 static void
 registry_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version)
 {
@@ -441,12 +406,12 @@ static const struct wl_registry_listener registry_listener = {
 int
 bar_main(void)
 {
-	const char *home;
 	char cfgpath[512];
-	int tfd, wfd, maxfd, r;
+	int tfd, ifd, wfd, maxfd, r;
 	fd_set rfds;
 	struct itimerspec its;
 	uint64_t exp;
+	char evbuf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
 
 	signal(SIGTERM, on_signal);
 	signal(SIGINT, on_signal);
@@ -455,14 +420,12 @@ bar_main(void)
 	bar.workspace = 1;
 	gethostname(bar.hostname, sizeof(bar.hostname));
 
-	/* load config; same file the compositor uses */
-	home = getenv("HOME");
-	if(home) {
-		snprintf(cfgpath, sizeof(cfgpath), "%s/.config/shoshin/shoshin.conf", home);
-		cfg_load(cfgpath);
-	}
+	snprintf(bar.ipc_dir, sizeof(bar.ipc_dir), "/tmp/shoshin-%d", (int)getuid());
 
-	/* brief delay so compositor socket is ready */
+	cfg_find_path(cfgpath, sizeof(cfgpath), NULL);
+	if(cfgpath[0])
+		cfg_load(cfgpath);
+
 	usleep(200000);
 
 	bar.display = wl_display_connect(NULL);
@@ -476,11 +439,7 @@ bar_main(void)
 	wl_display_roundtrip(bar.display);
 
 	if(!bar.compositor || !bar.shm || !bar.panel_manager) {
-		fprintf(stderr, "[bar] missing wayland globals "
-		        "(compositor=%p shm=%p panel_manager=%p)\n",
-		        (void*)bar.compositor,
-		        (void*)bar.shm,
-		        (void*)bar.panel_manager);
+		fprintf(stderr, "[bar] missing wayland globals\n");
 		return 1;
 	}
 
@@ -506,14 +465,21 @@ bar_main(void)
 		return 1;
 	}
 
-	/* 1 second timer for status updates (will change this later) */
+	swc_panel_set_y_offset(bar.panel, 0);
+	wl_display_roundtrip(bar.display);
+
 	tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 	if(tfd >= 0) {
-		its.it_interval.tv_sec = 1;
+		its.it_interval.tv_sec = 60;
 		its.it_interval.tv_nsec = 0;
-		its.it_value.tv_sec = 0;
-		its.it_value.tv_nsec = 1;
+		its.it_value.tv_sec = 60;
+		its.it_value.tv_nsec = 0;
 		timerfd_settime(tfd, 0, &its, NULL);
+	}
+
+	ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if(ifd >= 0) {
+		inotify_add_watch(ifd, bar.ipc_dir, IN_CLOSE_WRITE | IN_MOVED_TO);
 	}
 
 	wfd = wl_display_get_fd(bar.display);
@@ -525,7 +491,9 @@ bar_main(void)
 		FD_ZERO(&rfds);
 		FD_SET(wfd, &rfds);
 		if(tfd >= 0) FD_SET(tfd, &rfds);
+		if(ifd >= 0) FD_SET(ifd, &rfds);
 		maxfd = (tfd > wfd) ? tfd : wfd;
+		if(ifd > maxfd) maxfd = ifd;
 
 		r = select(maxfd + 1, &rfds, NULL, NULL, NULL);
 		if(r < 0) {
@@ -535,7 +503,17 @@ bar_main(void)
 
 		if(tfd >= 0 && FD_ISSET(tfd, &rfds)) {
 			read(tfd, &exp, sizeof(exp));
-			update_all();
+			update_cpu();
+			update_ram();
+			update_time();
+			render();
+		}
+
+		if(ifd >= 0 && FD_ISSET(ifd, &rfds)) {
+			while(read(ifd, evbuf, sizeof(evbuf)) > 0)
+				;
+			update_workspace();
+			update_title();
 			render();
 		}
 
@@ -547,6 +525,7 @@ bar_main(void)
 	}
 
 	if(tfd >= 0) close(tfd);
+	if(ifd >= 0) close(ifd);
 
 	if(bar.font) wld_font_close(bar.font);
 	if(bar.font_ctx) wld_font_destroy_context(bar.font_ctx);
@@ -557,8 +536,7 @@ bar_main(void)
 
 	if(bar.panel) swc_panel_destroy(bar.panel);
 	if(bar.surface) wl_surface_destroy(bar.surface);
-	if(bar.panel_manager)
-		swc_panel_manager_destroy(bar.panel_manager);
+	if(bar.panel_manager) swc_panel_manager_destroy(bar.panel_manager);
 	if(bar.shm) wl_shm_destroy(bar.shm);
 	if(bar.compositor) wl_compositor_destroy(bar.compositor);
 	if(bar.registry) wl_registry_destroy(bar.registry);

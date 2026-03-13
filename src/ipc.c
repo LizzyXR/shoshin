@@ -1,22 +1,19 @@
 #include "shoshin.h"
 
+static char ipc_dir[256];
+
 static void
 ipc_path(char *buf, size_t n, const char *name)
 {
-	const char *home = getenv("HOME");
-	if(home) snprintf(buf, n, "%s/.config/shoshin/%s", home, name);
+	if(ipc_dir[0]) snprintf(buf, n, "%s/%s", ipc_dir, name);
 	else buf[0] = '\0';
 }
 
 void
 ipc_init(void)
 {
-	const char *home = getenv("HOME");
-	char dir[512];
-	if(home) {
-		snprintf(dir, sizeof(dir), "%s/.config/shoshin", home);
-		mkdir(dir, 0755);
-	}
+	snprintf(ipc_dir, sizeof(ipc_dir), "/tmp/shoshin-%d", (int)getuid());
+	mkdir(ipc_dir, 0755);
 }
 
 void

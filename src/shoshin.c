@@ -43,6 +43,7 @@ struct wl_event_source *cursor_timer;
 
 int current_workspace = 1;
 pid_t bar_pid = -1;
+pid_t neumenu_pid = -1;
 
 static void
 setup_nein_cursor(void)
@@ -81,8 +82,6 @@ applyconfig(void)
 static void
 reloadconfig(void *data, uint32_t time, uint32_t key, uint32_t state)
 {
-	const char *home;
-
 	char path[512];
 	(void)data;
 	(void)time;
@@ -90,13 +89,14 @@ reloadconfig(void *data, uint32_t time, uint32_t key, uint32_t state)
 
 	if(state) return;
 
-	home = getenv("HOME");
-	if(home) {
-		snprintf(path, sizeof(path), "%s/.config/shoshin/shoshin.conf", home);
+	cfg_find_path(path, sizeof(path), NULL);
+	if(path[0]) {
 		cfg_load(path);
+		applyconfig();
+		printf("config reloaded from %s\n", path);
+	} else {
+		printf("no config found, keeping current settings\n");
 	}
-	applyconfig();
-	printf("config reloaded\n");
 }
 
 static void
@@ -126,7 +126,6 @@ sig(int s)
 	wl_display_terminate(display);
 }
 
-/* forks self with --bar */
 static void
 spawn_bar(void)
 {
@@ -134,6 +133,22 @@ spawn_bar(void)
 	if(bar_pid == 0) {
 		execl("/proc/self/exe", "shoshin", "--bar", NULL);
 		_exit(1);
+	}
+}
+
+static void
+neumenu_runner(void *data, uint32_t time, uint32_t key, uint32_t state)
+{
+	(void)data;
+	(void)time;
+	(void)key;
+
+	if(state) return;
+
+	neumenu_pid = fork();
+	if(neumenu_pid == 0) {
+		execlp("neumenu", "neumenu", NULL);
+		_exit(127);
 	}
 }
 
@@ -154,14 +169,12 @@ static const struct swc_manager manager = {
 int
 main(int argc, char **argv)
 {
-	const char *home;
 	const char *sock;
 	char cfgpath[512];
 	int i;
 
 	static const uint32_t ws_keys[9] = {XKB_KEY_1, XKB_KEY_2, XKB_KEY_3, XKB_KEY_4, XKB_KEY_5, XKB_KEY_6, XKB_KEY_7, XKB_KEY_8, XKB_KEY_9};
 
-	/* if invoked as the bar; hand off immediately */
 	if(argc >= 2 && strcmp(argv[1], "--bar") == 0) return bar_main();
 
 	wl_list_init(&windows);
@@ -170,10 +183,13 @@ main(int argc, char **argv)
 
 	ipc_init();
 
-	home = getenv("HOME");
-	if(home) snprintf(cfgpath, sizeof(cfgpath), "%s/.config/shoshin/shoshin.conf", home);
-	else cfgpath[0] = '\0';
-	cfg_load(cfgpath[0] ? cfgpath : "/dev/null");
+	cfg_find_path(cfgpath, sizeof(cfgpath), argv[0]);
+	if(cfgpath[0]) {
+		cfg_load(cfgpath);
+	} else {
+		fprintf(stderr, "[config] no config found, using defaults\n");
+		cfg_load("/dev/null");
+	}
 
 	display = wl_display_create();
 	if(!display) {
@@ -191,9 +207,9 @@ main(int argc, char **argv)
 	swc_wallpaper_color_set(cfg.background_color);
 	setup_nein_cursor();
 
-	/* keybindings */
-	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT | SWC_MOD_CTRL, XKB_KEY_q, quit, NULL); //kys
-	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO, XKB_KEY_q, killwindow, NULL); //kill focused window
+	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT | SWC_MOD_CTRL, XKB_KEY_q, quit, NULL);
+	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO, XKB_KEY_q, killwindow, NULL);
+	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO, XKB_KEY_d, neumenu_runner, NULL);
 	swc_add_binding(SWC_BINDING_KEY, SWC_MOD_LOGO | SWC_MOD_SHIFT, XKB_KEY_r, reloadconfig, NULL);
 
 	for(i = 0; i < 9; i++) {
@@ -229,7 +245,10 @@ main(int argc, char **argv)
 
 	wl_display_run(display);
 
-	if(bar_pid > 0) kill(bar_pid, SIGTERM);
+	if(bar_pid > 0) {
+		kill(bar_pid, SIGTERM);
+		waitpid(bar_pid, NULL, 0);
+	}
 
 	swc_finalize();
 	wl_display_destroy(display);

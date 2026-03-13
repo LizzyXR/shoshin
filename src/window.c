@@ -64,16 +64,34 @@ focus_window(struct swc_window *swc, const char *reason)
 	ipc_write_title(swc ? swc->title : NULL);
 
 	/* auto-scroll to center the focused window */
-	if(cfg.focus_center && swc && current_screen &&
-	   (is_visible(focused, current_screen) || chord_mode_cur == MODE_JUMP)) {
+	if(cfg.focus_center && swc && (chord_mode_cur == MODE_JUMP || current_screen)) {
 		struct swc_rectangle wg;
+		struct screen *target_screen = NULL;
+
 		if(swc_window_get_geometry(swc, &wg)) {
 			if(wg.width == 0 || wg.height == 0) return;
 
-			int32_t wcx = wg.x + (int32_t)wg.width  / 2;
+			/* find which screen geometrically contains this window */
+			struct screen *s;
+			wl_list_for_each(s, &screens, link) {
+				struct swc_rectangle *sg = &s->swc->geometry;
+				if(wg.x + (int32_t)wg.width > sg->x &&
+				   wg.x < sg->x + (int32_t)sg->width &&
+				   wg.y + (int32_t)wg.height > sg->y &&
+				   wg.y < sg->y + (int32_t)sg->height) {
+					target_screen = s;
+					break;
+				}
+			}
+
+			/* fallback to current_screen if window isn't clearly on any screen */
+			if(!target_screen) target_screen = current_screen;
+			if(!target_screen) return;
+
+			int32_t wcx = wg.x + (int32_t)wg.width / 2;
 			int32_t wcy = wg.y + (int32_t)wg.height / 2;
-			int32_t scx = current_screen->swc->geometry.x + (int32_t)current_screen->swc->geometry.width  / 2;
-			int32_t scy = current_screen->swc->geometry.y + (int32_t)current_screen->swc->geometry.height / 2;
+			int32_t scx = target_screen->swc->geometry.x + (int32_t)target_screen->swc->geometry.width / 2;
+			int32_t scy = target_screen->swc->geometry.y + (int32_t)target_screen->swc->geometry.height / 2;
 
 			int32_t dx = cfg.scroll_drag_mode ? (scx - wcx) : 0;
 			int32_t dy = scy - wcy;
@@ -84,8 +102,7 @@ focus_window(struct swc_window *swc, const char *reason)
 				scroll_px_x = dx;
 				scroll_auto = true;
 
-				if(!scroll_timer)
-					scroll_timer = wl_event_loop_add_timer(evloop, scroll_tick, NULL);
+				if(!scroll_timer) scroll_timer = wl_event_loop_add_timer(evloop, scroll_tick, NULL);
 				wl_event_source_timer_update(scroll_timer, cfg.timerms);
 			}
 		}
@@ -249,7 +266,7 @@ newwindow(struct swc_window *swc)
 
 	if(is_sel) {
 		g = spawn_geometry;
-		if(g.width < 50) g.width  = 50;
+		if(g.width < 50) g.width = 50;
 		if(g.height < 50) g.height = 50;
 		swc_window_set_geometry(swc, &g);
 		spawn_pending = false;
